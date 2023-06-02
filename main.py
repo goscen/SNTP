@@ -1,37 +1,48 @@
-import argparse
 import socket
+import datetime
+import argparse
 import struct
-import threading
-import time
+from multiprocessing.pool import ThreadPool
+
+TIME = datetime.datetime(1900, 1, 1)
 
 
-def craft_and_send_ntp_packet(sock: socket, addr, delay):
-    current_time = time.time()
-    current_time += delay
-    li_vn_mode = (0 << 6) | (4 << 3) | 4  # LI = 0, VN = 4, Mode = 4 (server)
-    """
-    stratum = 0, pool = 0, precision = -6, root_delay = 0, root_dispersion = 0,
-    ref_id = 2130706433(127.0.0.1)
-    """
-    packet = struct.pack("!BBBb11I", li_vn_mode, 0, 0, -6, 0, 0, 2130706433, int(current_time),
-                         int((current_time - int(current_time)) * 2 ** 32))
-    sock.sendto(packet, addr)
+def send_packet(input_packet, address, sock, receive_time):
+    packet = struct.pack('!B', 28) + struct.pack('!B', 1) \
+             + struct.pack('!b', 0) + struct.pack('!b', -20) + struct.pack('!i', 0) \
+             + struct.pack('!i', 0) + struct.pack('!i', 0) \
+             + get_time() + input_packet[40:48] + receive_time
+    sock.sendto(packet + get_time(), address)
 
 
-def start_server(delay, port):
+def get_time():
+    time = (datetime.datetime.utcnow() - TIME).total_seconds() + my_delay
+    seconds, milliseconds = [int(x) for x in str(time).split('.')]
+    return struct.pack('!II', seconds, milliseconds)
+
+
+def start_work():
+    print("Server is running")
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(("localhost", port))
-    print("server starts to work")
+    sock.bind(("localhost", my_port))
+    # 10 потоков
+    thread_pool = ThreadPool(processes=10)
     while True:
         data, addr = sock.recvfrom(1024)
-        print(f"Work with {addr}")
-        t = threading.Thread(target=craft_and_send_ntp_packet, args=(sock, addr, delay))
-        t.start()
+        print(f'{addr[0]} connected')
+        receive_time = get_time()
+        thread_pool.apply_async(send_packet, args=(data, addr, sock, receive_time))
 
 
-if __name__ == "__main__":
+def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-d", "--delay", type=int, default=0)
-    parser.add_argument("-p", "--port", type=int, default=123)
-    args = parser.parse_args()
-    start_server(args.delay, args.port)
+    parser.add_argument('-d', dest="delay", type=int, default=0)
+    parser.add_argument('-p', '--port', dest="port", type=int, default=123)
+    return parser.parse_args()
+
+
+if __name__ == '__main__':
+    args = parse_args()
+    my_delay = args.delay
+    my_port = args.port
+    start_work()
